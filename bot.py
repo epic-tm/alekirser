@@ -5,9 +5,7 @@ import requests
 from bs4 import BeautifulSoup
 import random
 import os
-import asyncio
 
-# --- CONFIG ---
 TOKEN = os.getenv('DISCORD_TOKEN')
 
 FFMPEG_OPTIONS = {
@@ -19,64 +17,67 @@ intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-def get_flaru_links(query):
-    """Scrapes flaru.com for alekirser links"""
-    search_url = f"https://flaru.com/en/search/?q={query}"
-    headers = {'User-Agent': 'Mozilla/5.0'} 
+def get_alekirser_tracks():
+    """Scrapes the specific alekirser profile on Flaru"""
+    # Using your suggested URL
+    url = "https://www.flaru.com/en/soundgasm.net/alekirser"
+    headers = {'User-Agent': 'Mozilla/5.0'}
     
     try:
-        response = requests.get(search_url, headers=headers, timeout=10)
+        response = requests.get(url, headers=headers, timeout=15)
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # We look for links that Flaru usually indexes (Soundgasm, etc)
+        # On this specific page, we look for all links that go to soundgasm
         links = []
         for a in soup.find_all('a', href=True):
             href = a['href']
-            if 'soundgasm.net' in href or 'soundcloud.com' in href:
+            if 'soundgasm.net/u/alekirser/' in href:
                 links.append(href)
-        return links
+        
+        # Remove duplicates
+        return list(set(links))
     except Exception as e:
         print(f"Scrape error: {e}")
         return []
 
-@bot.event
-async def on_ready():
-    print(f'✅ Bot is live: {bot.user}')
-
 @bot.command()
 async def play(ctx):
-    """Plays a random alekirser track found on Flaru"""
+    """Picks a random track from the alekirser soundgasm list on Flaru"""
     if not ctx.author.voice:
-        return await ctx.send("🔊 Join a voice channel first!")
+        return await ctx.send("🔊 You need to be in a Voice Channel first!")
 
     if ctx.voice_client is None:
         await ctx.author.voice.channel.connect()
 
     async with ctx.typing():
-        links = get_flaru_links("alekirser")
+        # Get the list from the specific page
+        tracks = get_alekirser_tracks()
         
-        if not links:
-            return await ctx.send("🔍 No Alekirser tracks found on Flaru right now.")
+        if not tracks:
+            return await ctx.send("🔍 Couldn't find any tracks on that page. Try again in a moment!")
 
-        # Pick one at random
-        target_url = random.choice(links)
+        # Pick a random one
+        chosen_track = random.choice(tracks)
 
+        # Extract the audio using yt-dlp
         with yt_dlp.YoutubeDL({'format': 'bestaudio', 'quiet': True}) as ydl:
-            info = ydl.extract_info(target_url, download=False)
-            audio_url = info['url']
-            title = info.get('title', 'Alekirser Track')
+            try:
+                info = ydl.extract_info(chosen_track, download=False)
+                audio_url = info['url']
+                title = info.get('title', 'Alekirser Audio')
 
-        if ctx.voice_client.is_playing():
-            ctx.voice_client.stop()
+                if ctx.voice_client.is_playing():
+                    ctx.voice_client.stop()
 
-        ctx.voice_client.play(discord.FFmpegPCMAudio(audio_url, **FFMPEG_OPTIONS))
-        await ctx.send(f"🎲 **Random Pick from Flaru:** {title}")
+                source = discord.FFmpegPCMAudio(audio_url, **FFMPEG_OPTIONS)
+                ctx.voice_client.play(source)
+                await ctx.send(f"🎲 **Playing Random Alekirser:** {title}")
+            except:
+                await ctx.send("⚠️ This specific track failed to load. Try `!play` again for a new one!")
 
 @bot.command()
 async def stop(ctx):
     if ctx.voice_client:
         await ctx.voice_client.disconnect()
 
-# THIS MUST BE THE ABSOLUTE LAST LINE. 
-# DO NOT ADD ANYTHING AFTER THIS.
 bot.run(TOKEN)
