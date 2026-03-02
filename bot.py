@@ -6,11 +6,22 @@ from bs4 import BeautifulSoup
 import random
 import os
 
+# Your Secret Token from Railway/Host
 TOKEN = os.getenv('DISCORD_TOKEN')
 
+# Reconnection settings for smooth audio
 FFMPEG_OPTIONS = {
     'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
     'options': '-vn',
+}
+
+# The fix for the 403 error in your screenshot
+YDL_OPTIONS = {
+    'format': 'bestaudio/best',
+    'noplaylist': True,
+    'quiet': True,
+    # This impersonates Chrome to get past Cloudflare
+    'extractor_args': {'generic': {'impersonate': ['chrome']}}, 
 }
 
 intents = discord.Intents.default()
@@ -19,30 +30,34 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 
 def get_alekirser_tracks():
     """Scrapes the specific alekirser profile on Flaru"""
-    # Using your suggested URL
     url = "https://www.flaru.com/en/soundgasm.net/alekirser"
-    headers = {'User-Agent': 'Mozilla/5.0'}
+    # We also use a browser header here for the scraper
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36'
+    }
     
     try:
         response = requests.get(url, headers=headers, timeout=15)
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # On this specific page, we look for all links that go to soundgasm
         links = []
         for a in soup.find_all('a', href=True):
             href = a['href']
             if 'soundgasm.net/u/alekirser/' in href:
                 links.append(href)
         
-        # Remove duplicates
         return list(set(links))
     except Exception as e:
         print(f"Scrape error: {e}")
         return []
 
+@bot.event
+async def on_ready():
+    print(f'✅ Bot is online as {bot.user}')
+
 @bot.command()
 async def play(ctx):
-    """Picks a random track from the alekirser soundgasm list on Flaru"""
+    """Picks a random track from the Alekirser Flaru page"""
     if not ctx.author.voice:
         return await ctx.send("🔊 You need to be in a Voice Channel first!")
 
@@ -50,17 +65,15 @@ async def play(ctx):
         await ctx.author.voice.channel.connect()
 
     async with ctx.typing():
-        # Get the list from the specific page
         tracks = get_alekirser_tracks()
         
         if not tracks:
-            return await ctx.send("🔍 Couldn't find any tracks on that page. Try again in a moment!")
+            return await ctx.send("🔍 Still blocked by Cloudflare or no tracks found. Try again!")
 
-        # Pick a random one
         chosen_track = random.choice(tracks)
 
-        # Extract the audio using yt-dlp
-        with yt_dlp.YoutubeDL({'format': 'bestaudio', 'quiet': True}) as ydl:
+        # We apply the impersonation here too
+        with yt_dlp.YoutubeDL(YDL_OPTIONS) as ydl:
             try:
                 info = ydl.extract_info(chosen_track, download=False)
                 audio_url = info['url']
@@ -71,9 +84,9 @@ async def play(ctx):
 
                 source = discord.FFmpegPCMAudio(audio_url, **FFMPEG_OPTIONS)
                 ctx.voice_client.play(source)
-                await ctx.send(f"🎲 **Playing Random Alekirser:** {title}")
-            except:
-                await ctx.send("⚠️ This specific track failed to load. Try `!play` again for a new one!")
+                await ctx.send(f"🎲 **Now Playing:** {title}")
+            except Exception as e:
+                await ctx.send(f"⚠️ Track failed to load: {str(e)}")
 
 @bot.command()
 async def stop(ctx):
