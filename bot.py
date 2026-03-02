@@ -7,7 +7,7 @@ import os
 
 # --- CONFIGURATION ---
 # We pull the token from the server environment instead of typing it here
-TOKEN = os.getenv('DISCORD_TOKEN')
+TOKEN = os.getenv('ODA5MDUyNjc0NjMyODQzMjgz.G7n9G0.7uk9jt5Jdi01BiCja80IwyMDh9XIe4QB7JjMMk')
 
 FFMPEG_OPTIONS = {
     'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
