@@ -1,5 +1,4 @@
 discord.py[voice]
 yt-dlp
 requests
-beautifulsoup4discord.py[voice]
-yt-dlp
+beautifulsoup4
