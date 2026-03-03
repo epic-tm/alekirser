@@ -22,27 +22,29 @@ async def play(ctx):
     if not ctx.author.voice:
         return await ctx.send("🔊 Join a voice channel first!")
 
+    # Find .m4a files
     songs = [f for f in os.listdir('.') if f.endswith('.m4a')]
     if not songs:
-        return await ctx.send("❌ No .m4a files found!")
+        return await ctx.send("❌ No .m4a files found in the folder!")
 
     if ctx.voice_client is None:
         await ctx.author.voice.channel.connect()
 
     await asyncio.sleep(1)
     
-    # 🔍 AUTO-FIND FFMPEG
+    # 🔍 AUTO-FIND FFMPEG ON THE SERVER
     ffmpeg_exe = shutil.which("ffmpeg")
     if not ffmpeg_exe:
-        # Check the specific Nix path where Railway hides it
-        for path in ["/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/nix/var/nix/profiles/default/bin/ffmpeg"]:
+        # Check specific paths where Railway/Nix often hides it
+        possible_paths = ["/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/nix/var/nix/profiles/default/bin/ffmpeg"]
+        for path in possible_paths:
             if os.path.exists(path):
                 ffmpeg_exe = path
                 break
 
     track = random.choice(songs)
     try:
-        # If we found a path, use it; otherwise try the default 'ffmpeg'
+        # If we found a path, use it; otherwise try the system default 'ffmpeg'
         source = discord.FFmpegPCMAudio(track, executable=ffmpeg_exe or "ffmpeg")
         ctx.voice_client.play(source)
         await ctx.send(f"🎶 **Now playing:** {track}")
