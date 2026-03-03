@@ -4,7 +4,6 @@ import os
 import random
 import asyncio
 import shutil
-import subprocess
 
 TOKEN = os.getenv('DISCORD_TOKEN', '').strip()
 
@@ -16,13 +15,10 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 
 @bot.event
 async def on_ready():
-    # 🔍 This will print to your Railway logs so we can see if the build command worked
+    # 🔍 This will tell us EXACTLY where FFmpeg is in your logs
     path = shutil.which("ffmpeg")
     print(f'✅ Bot Online: {bot.user}')
-    if path:
-        print(f'⚡ FFmpeg FOUND at: {path}')
-    else:
-        print('❌ FFmpeg is STILL MISSING from the system path.')
+    print(f'🛠️ FFmpeg Detection: {"FOUND at " + path if path else "STILL MISSING"}')
 
 @bot.command()
 async def play(ctx):
@@ -38,18 +34,23 @@ async def play(ctx):
 
     await asyncio.sleep(1)
     
-    # Try to find the executable
-    exe = shutil.which("ffmpeg") or "ffmpeg"
+    # 🕵️‍♂️ Manual Search for the FFmpeg "Engine"
+    executable = shutil.which("ffmpeg")
+    if not executable:
+        # Check specific paths where Railway/Nix builds store software
+        for loc in ["/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/nix/var/nix/profiles/default/bin/ffmpeg"]:
+            if os.path.exists(loc):
+                executable = loc
+                break
+
     track = random.choice(songs)
-    
     try:
-        source = discord.FFmpegPCMAudio(track, executable=exe)
+        # We tell Discord exactly where the engine is
+        source = discord.FFmpegPCMAudio(track, executable=executable or "ffmpeg")
         ctx.voice_client.play(source)
         await ctx.send(f"🎶 **Now playing:** {track}")
     except Exception as e:
-        # This error message will be very specific
         await ctx.send(f"⚠️ Audio Error: {e}")
-        print(f"Detailed Error: {e}")
 
 @bot.command()
 async def stop(ctx):
