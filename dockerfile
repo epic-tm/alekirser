@@ -1,6 +1,7 @@
+# Use a Python base image
 FROM python:3.11-slim
 
-# Install system dependencies (FFmpeg is here!)
+# 🛠️ THIS IS THE FIX: Installs FFmpeg directly into the OS
 RUN apt-get update && apt-get install -y \
     ffmpeg \
     libffi-dev \
@@ -8,10 +9,11 @@ RUN apt-get update && apt-get install -y \
     python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
+# Set the working folder
 WORKDIR /app
 COPY . /app
 
-# Install python libraries
+# Install your bot's libraries
 RUN pip install --no-cache-dir discord.py[voice] PyNaCl
 
 # Start the bot
