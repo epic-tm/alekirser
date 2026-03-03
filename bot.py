@@ -55,4 +55,4 @@ async def stop(ctx):
         await ctx.voice_client.disconnect()
         await ctx.send("👋 Left.")
 
-bot.run(TOKEN)b
+bot.run(TOKEN)
