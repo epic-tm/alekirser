@@ -3,31 +3,35 @@ from discord.ext import commands
 import os
 import random
 import asyncio
+import shutil
 
-# Clean the token for any accidental spaces
+# 1. Get Token from environment variables
 TOKEN = os.getenv('DISCORD_TOKEN', '').strip()
 
+# 2. Setup Intents (Must be ON in Discord Developer Portal)
 intents = discord.Intents.default()
-intents.message_content = True
-intents.voice_states = True
+intents.message_content = True 
+intents.voice_states = True    
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
 @bot.event
 async def on_ready():
-    print(f'✅ {bot.user} is online and ready!')
+    print(f'✅ Logged in as: {bot.user.name}')
+    # Verify files are present
     songs = [f for f in os.listdir('.') if f.endswith('.m4a')]
-    print(f'📂 Local tracks found: {songs}')
+    print(f'📂 Found {len(songs)} tracks in folder.')
 
 @bot.command()
 async def play(ctx):
+    """Joins voice and plays a random m4a file"""
     if not ctx.author.voice:
-        return await ctx.send("🔊 Please join a voice channel first!")
+        return await ctx.send("🔊 Please join a Voice Channel first!")
 
-    # Find all m4a files in the current folder
+    # Search for audio files
     songs = [f for f in os.listdir('.') if f.endswith('.m4a')]
     if not songs:
-        return await ctx.send("❌ I couldn't find any .m4a files in my folder!")
+        return await ctx.send("❌ Error: No .m4a files found in the bot folder!")
 
     # Connect to Voice
     if ctx.voice_client is None:
@@ -35,25 +39,34 @@ async def play(ctx):
     else:
         vc = ctx.voice_client
 
-    # IMPORTANT: Wait 1 second so Discord can initialize the audio stream
+    # Wait for connection to stabilize
     await asyncio.sleep(1)
-
+    
+    # Pick a random track
     track = random.choice(songs)
     
     if vc.is_playing():
         vc.stop()
 
+    # 🛠️ THE FIX: Locate FFmpeg automatically on the server
+    ffmpeg_path = shutil.which("ffmpeg")
+    if not ffmpeg_path:
+        # Check common Linux paths as a backup
+        for path in ["/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg"]:
+            if os.path.exists(path):
+                ffmpeg_path = path
+                break
+    
+    if not ffmpeg_path:
+        return await ctx.send("⚠️ Error: FFmpeg is not installed on this server.")
+
     try:
-        # FFMPEG options to handle stream stability
-        ffmpeg_opts = {'options': '-vn', 'before_options': '-reconnect 1 -reconnect_delay_max 5'}
-        
-        # Load the file and boost volume to 80%
-        source = discord.PCMVolumeTransformer(discord.FFmpegPCMAudio(track, **ffmpeg_opts), volume=0.8)
-        
+        # Play using the specific FFmpeg path found
+        source = discord.FFmpegPCMAudio(track, executable=ffmpeg_path)
         vc.play(source)
-        await ctx.send(f"🎲 **Now Playing:** {track}")
+        await ctx.send(f"🎲 **Now playing:** {track}")
     except Exception as e:
-        await ctx.send(f"⚠️ Audio Error: {e}")
+        await ctx.send(f"⚠️ Audio Error: {str(e)}")
 
 @bot.command()
 async def stop(ctx):
@@ -61,4 +74,8 @@ async def stop(ctx):
         await ctx.voice_client.disconnect()
         await ctx.send("👋 Disconnected.")
 
-bot.run(TOKEN)
+# Safety check for the token
+if not TOKEN:
+    print("❌ FATAL: DISCORD_TOKEN variable is empty!")
+else:
+    bot.run(TOKEN)
