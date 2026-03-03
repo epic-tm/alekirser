@@ -3,11 +3,10 @@ from discord.ext import commands
 import os
 import random
 import asyncio
+import shutil
 
-# 1. Clean Token Load
 TOKEN = os.getenv('DISCORD_TOKEN', '').strip()
 
-# 2. Setup Intents
 intents = discord.Intents.default()
 intents.message_content = True 
 intents.voice_states = True    
@@ -20,42 +19,40 @@ async def on_ready():
 
 @bot.command()
 async def play(ctx):
-    """Joins voice and plays a random m4a file"""
     if not ctx.author.voice:
-        return await ctx.send("🔊 Please join a voice channel first!")
+        return await ctx.send("🔊 Join a voice channel first!")
 
-    # Search for audio files
     songs = [f for f in os.listdir('.') if f.endswith('.m4a')]
     if not songs:
-        return await ctx.send("❌ Error: No .m4a files found in the bot folder!")
+        return await ctx.send("❌ No .m4a files found!")
 
-    # Connect to Voice
     if ctx.voice_client is None:
-        vc = await ctx.author.voice.channel.connect()
-    else:
-        vc = ctx.voice_client
+        await ctx.author.voice.channel.connect()
 
-    # Wait for connection to stabilize
     await asyncio.sleep(1)
     
-    track = random.choice(songs)
-    
-    if vc.is_playing():
-        vc.stop()
+    # 🔍 AUTO-FIND FFMPEG
+    ffmpeg_exe = shutil.which("ffmpeg")
+    if not ffmpeg_exe:
+        # Check the specific Nix path where Railway hides it
+        for path in ["/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/nix/var/nix/profiles/default/bin/ffmpeg"]:
+            if os.path.exists(path):
+                ffmpeg_exe = path
+                break
 
+    track = random.choice(songs)
     try:
-        # Standard playback - Railway will find ffmpeg because of the build command
-        source = discord.FFmpegPCMAudio(track)
-        vc.play(source)
+        # If we found a path, use it; otherwise try the default 'ffmpeg'
+        source = discord.FFmpegPCMAudio(track, executable=ffmpeg_exe or "ffmpeg")
+        ctx.voice_client.play(source)
         await ctx.send(f"🎶 **Now playing:** {track}")
     except Exception as e:
-        await ctx.send(f"⚠️ Audio Error: {str(e)}")
+        await ctx.send(f"⚠️ Audio Error: {e}")
 
 @bot.command()
 async def stop(ctx):
-    """Stops and leaves"""
     if ctx.voice_client:
         await ctx.voice_client.disconnect()
-        await ctx.send("👋 Left the voice channel.")
+        await ctx.send("👋 Left.")
 
 bot.run(TOKEN)
