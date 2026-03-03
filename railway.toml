@@ -1,9 +1,0 @@
-[build]
-builder = "NIXPACKS"
-
-[build.setup]
-pkgs = ["python3", "ffmpeg"]
-
-[deploy]
-startCommand = "python bot.py"
-restartPolicyType = "ON_FAILURE"
