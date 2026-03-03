@@ -1,12 +1,2 @@
 [phases.setup]
-nixLibs = ["zlib","stdenv.cc.cc.lib"]
-nixPkgs = ['python310', 'postgresql', 'gcc']
-
-[phases.install]
-cmds = [ "python -m venv /opt/venv && . /opt/venv/bin/activate && pip install poetry && cd apps/server && poetry install --no-dev --no-interaction --no-ansi"]
-
-[build]
-cmd = "cd apps/server && . /opt/venv/bin/activate && ./manage.py collectstatic --noinput"
-
-[start]
-cmd = "cd apps/server && . /opt/venv/bin/activate && python ./manage.py migrate && python ./manage.py createsu && gunicorn -b :8000 --workers 3 --threads 12 --timeout 600 --log-level debug devclad.wsgi"
+aptPkgs = ["ffmpeg"]
