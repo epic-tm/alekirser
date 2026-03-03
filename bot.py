@@ -3,8 +3,8 @@ from discord.ext import commands
 import os
 import random
 import asyncio
-import shutil
 
+# --- CONFIG ---
 TOKEN = os.getenv('DISCORD_TOKEN', '').strip()
 
 intents = discord.Intents.default()
@@ -15,14 +15,15 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 
 @bot.event
 async def on_ready():
-    print(f'✅ {bot.user.name} is online!')
+    print(f'✅ Bot is online: {bot.user}')
 
 @bot.command()
 async def play(ctx):
+    """Simple play command for local m4a files"""
     if not ctx.author.voice:
         return await ctx.send("🔊 Join a Voice Channel first!")
 
-    # Get local files
+    # Find local tracks
     songs = [f for f in os.listdir('.') if f.endswith('.m4a')]
     if not songs:
         return await ctx.send("❌ No .m4a files found in the folder!")
@@ -30,29 +31,24 @@ async def play(ctx):
     if ctx.voice_client is None:
         await ctx.author.voice.channel.connect()
 
-    await asyncio.sleep(1)
+    await asyncio.sleep(1) # Let the connection settle
     track = random.choice(songs)
     
     if ctx.voice_client.is_playing():
         ctx.voice_client.stop()
 
-    # THE CRITICAL FIX: Manually find FFmpeg path
-    ffmpeg_exe = shutil.which("ffmpeg")
-    if not ffmpeg_exe:
-        # Check common Linux server locations
-        for loc in ["/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/nix/store/*/bin/ffmpeg"]:
-            if os.path.exists(loc):
-                ffmpeg_exe = loc
-                break
-
-    if not ffmpeg_exe:
-        return await ctx.send("⚠️ Error: FFmpeg is still not installed on this server.")
-
     try:
-        source = discord.FFmpegPCMAudio(track, executable=ffmpeg_exe)
+        # We don't specify the path here; we let the system find 'ffmpeg'
+        source = discord.FFmpegPCMAudio(track)
         ctx.voice_client.play(source)
         await ctx.send(f"🎶 **Now playing:** {track}")
     except Exception as e:
+        # This is the error you keep seeing in your screenshots
         await ctx.send(f"⚠️ Audio Error: {e}")
+
+@bot.command()
+async def stop(ctx):
+    if ctx.voice_client:
+        await ctx.voice_client.disconnect()
 
 bot.run(TOKEN)
