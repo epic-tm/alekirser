@@ -1,3 +1,0 @@
-[build]
-builder = "NIXPACKS"
-buildPlan = { setup = { nixPkgs = ["python3", "ffmpeg"] } }
