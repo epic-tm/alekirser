@@ -1,4 +1,2 @@
 discord.py[voice]
-yt-dlp[default,curl-cffi]
-requests
-beautifulsoup4
+PyNaCl
