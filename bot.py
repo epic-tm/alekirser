@@ -1,65 +1,263 @@
 import discord
+from discord import app_commands
 from discord.ext import commands
-import os
-import random
 import asyncio
-import shutil
+import aiohttp
+import os
+import tempfile
+import logging
+from dataclasses import dataclass, field
+from collections import deque
+from typing import Optional
 
-TOKEN = os.getenv('DISCORD_TOKEN', '').strip()
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger(__name__)
 
-intents = discord.Intents.default()
-intents.message_content = True 
-intents.voice_states = True    
+DISCORD_TOKEN = os.environ["DISCORD_TOKEN"]
 
-bot = commands.Bot(command_prefix='!', intents=intents)
+FFMPEG_OPTIONS = {
+    "before_options": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
+    "options": "-vn",
+}
 
-def find_ffmpeg():
-    """Hunts for the FFmpeg engine in the system."""
-    # Check standard path
-    path = shutil.which("ffmpeg")
-    if path:
-        return path
-    # Check common Linux paths
-    for loc in ["/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/app/ffmpeg"]:
-        if os.path.exists(loc):
-            return loc
-    return None
 
-@bot.event
-async def on_ready():
-    path = find_ffmpeg()
-    print(f'✅ Bot Online: {bot.user}')
-    print(f'🛠️ FFmpeg Status: {"FOUND at " + path if path else "STILL MISSING"}')
+@dataclass
+class Track:
+    title: str
+    url: str        # original Discord CDN URL
+    filename: str   # local temp file path after download
+    requester: str
 
-@bot.command()
-async def play(ctx):
-    if not ctx.author.voice:
-        return await ctx.send("🔊 Join a voice channel first!")
 
-    songs = [f for f in os.listdir('.') if f.endswith('.m4a')]
-    if not songs:
-        return await ctx.send("❌ No .m4a files found in the folder!")
+@dataclass
+class GuildPlayer:
+    queue: deque = field(default_factory=deque)
+    current: Optional[Track] = None
+    temp_dir: str = field(default_factory=lambda: tempfile.mkdtemp(prefix="m4a_"))
 
-    if ctx.voice_client is None:
-        await ctx.author.voice.channel.connect()
 
-    await asyncio.sleep(1)
-    
-    exe_path = find_ffmpeg()
-    track = random.choice(songs)
-    
+class M4ABot(commands.Bot):
+    def __init__(self):
+        intents = discord.Intents.default()
+        intents.message_content = True
+        super().__init__(command_prefix="!", intents=intents)
+        self.guild_players: dict[int, GuildPlayer] = {}
+
+    async def setup_hook(self):
+        await self.tree.sync()
+        log.info("Slash commands synced globally.")
+
+    def get_player(self, guild_id: int) -> GuildPlayer:
+        if guild_id not in self.guild_players:
+            self.guild_players[guild_id] = GuildPlayer()
+        return self.guild_players[guild_id]
+
+    async def download_track(self, url: str, dest: str) -> None:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as resp:
+                resp.raise_for_status()
+                with open(dest, "wb") as f:
+                    async for chunk in resp.content.iter_chunked(1024 * 64):
+                        f.write(chunk)
+
+    def play_next(self, guild: discord.Guild, error=None):
+        if error:
+            log.error(f"Playback error in {guild.name}: {error}")
+        asyncio.run_coroutine_threadsafe(self._advance_queue(guild), self.loop)
+
+    async def _advance_queue(self, guild: discord.Guild):
+        player = self.get_player(guild.id)
+
+        # Clean up finished track's temp file
+        if player.current and os.path.exists(player.current.filename):
+            try:
+                os.remove(player.current.filename)
+            except OSError:
+                pass
+
+        player.current = None
+
+        if not player.queue:
+            return
+
+        vc: discord.VoiceClient = guild.voice_client
+        if not vc or not vc.is_connected():
+            return
+
+        track = player.queue.popleft()
+        player.current = track
+
+        try:
+            source = discord.FFmpegPCMAudio(track.filename, **FFMPEG_OPTIONS)
+            source = discord.PCMVolumeTransformer(source, volume=1.0)
+            vc.play(source, after=lambda e: self.play_next(guild, e))
+            log.info(f"Now playing: {track.title} in {guild.name}")
+        except Exception as e:
+            log.error(f"Failed to play {track.title}: {e}")
+            await self._advance_queue(guild)
+
+
+bot = M4ABot()
+
+
+# ── Helper ──────────────────────────────────────────────────────────────────
+
+async def ensure_voice(interaction: discord.Interaction) -> Optional[discord.VoiceClient]:
+    """Join or return existing voice client. Returns None and responds on failure."""
+    member = interaction.user
+    if not isinstance(member, discord.Member) or not member.voice or not member.voice.channel:
+        await interaction.followup.send("❌ You must be in a voice channel.", ephemeral=True)
+        return None
+
+    vc = interaction.guild.voice_client
+    if vc and vc.channel != member.voice.channel:
+        await vc.move_to(member.voice.channel)
+    elif not vc:
+        vc = await member.voice.channel.connect()
+    return vc
+
+
+# ── Slash Commands ───────────────────────────────────────────────────────────
+
+@bot.tree.command(name="play", description="Play an m4a file attachment or enqueue it if something is playing")
+@app_commands.describe(file="The .m4a audio file to play")
+async def play(interaction: discord.Interaction, file: discord.Attachment):
+    await interaction.response.defer()
+
+    if not file.filename.lower().endswith(".m4a"):
+        await interaction.followup.send("❌ Only `.m4a` files are supported.", ephemeral=True)
+        return
+
+    vc = await ensure_voice(interaction)
+    if not vc:
+        return
+
+    player = bot.get_player(interaction.guild_id)
+
+    # Download to temp file
+    dest = os.path.join(player.temp_dir, f"{file.id}_{file.filename}")
+    await interaction.followup.send(f"⬇️ Downloading **{file.filename}**…")
+
     try:
-        # We explicitly tell Discord where the engine is
-        source = discord.FFmpegPCMAudio(track, executable=exe_path or "ffmpeg")
-        ctx.voice_client.play(source)
-        await ctx.send(f"🎶 **Now playing:** {track}")
+        await bot.download_track(file.url, dest)
     except Exception as e:
-        await ctx.send(f"⚠️ Audio Error: {e}")
-        print(f"DEBUG: {e}")
+        await interaction.followup.send(f"❌ Download failed: {e}", ephemeral=True)
+        return
 
-@bot.command()
-async def stop(ctx):
-    if ctx.voice_client:
-        await ctx.voice_client.disconnect()
+    track = Track(
+        title=file.filename,
+        url=file.url,
+        filename=dest,
+        requester=interaction.user.display_name,
+    )
 
-bot.run(TOKEN)
+    if vc.is_playing() or vc.is_paused():
+        player.queue.append(track)
+        pos = len(player.queue)
+        await interaction.followup.send(f"📋 Added to queue (position {pos}): **{track.title}**")
+    else:
+        player.queue.appendleft(track)
+        await bot._advance_queue(interaction.guild)
+        await interaction.followup.send(f"▶️ Now playing: **{track.title}**")
+
+
+@bot.tree.command(name="skip", description="Skip the current track")
+async def skip(interaction: discord.Interaction):
+    vc = interaction.guild.voice_client
+    if not vc or not vc.is_playing():
+        await interaction.response.send_message("❌ Nothing is playing.", ephemeral=True)
+        return
+    vc.stop()  # triggers after callback → play_next
+    await interaction.response.send_message("⏭️ Skipped.")
+
+
+@bot.tree.command(name="stop", description="Stop playback and clear the queue")
+async def stop(interaction: discord.Interaction):
+    player = bot.get_player(interaction.guild_id)
+    player.queue.clear()
+    vc = interaction.guild.voice_client
+    if vc:
+        vc.stop()
+    await interaction.response.send_message("⏹️ Stopped and queue cleared.")
+
+
+@bot.tree.command(name="pause", description="Pause playback")
+async def pause(interaction: discord.Interaction):
+    vc = interaction.guild.voice_client
+    if vc and vc.is_playing():
+        vc.pause()
+        await interaction.response.send_message("⏸️ Paused.")
+    else:
+        await interaction.response.send_message("❌ Nothing to pause.", ephemeral=True)
+
+
+@bot.tree.command(name="resume", description="Resume paused playback")
+async def resume(interaction: discord.Interaction):
+    vc = interaction.guild.voice_client
+    if vc and vc.is_paused():
+        vc.resume()
+        await interaction.response.send_message("▶️ Resumed.")
+    else:
+        await interaction.response.send_message("❌ Not paused.", ephemeral=True)
+
+
+@bot.tree.command(name="queue", description="Show the current queue")
+async def queue_cmd(interaction: discord.Interaction):
+    player = bot.get_player(interaction.guild_id)
+    lines = []
+    if player.current:
+        lines.append(f"▶️ **Now playing:** {player.current.title} (requested by {player.current.requester})")
+    if player.queue:
+        lines.append("**Up next:**")
+        for i, t in enumerate(player.queue, 1):
+            lines.append(f"  {i}. {t.title} — {t.requester}")
+    if not lines:
+        await interaction.response.send_message("📭 Queue is empty.")
+    else:
+        await interaction.response.send_message("\n".join(lines))
+
+
+@bot.tree.command(name="nowplaying", description="Show the currently playing track")
+async def nowplaying(interaction: discord.Interaction):
+    player = bot.get_player(interaction.guild_id)
+    if player.current:
+        await interaction.response.send_message(
+            f"▶️ **Now playing:** {player.current.title}\n👤 Requested by: {player.current.requester}"
+        )
+    else:
+        await interaction.response.send_message("📭 Nothing is playing right now.")
+
+
+@bot.tree.command(name="join", description="Join your voice channel")
+async def join(interaction: discord.Interaction):
+    await interaction.response.defer()
+    vc = await ensure_voice(interaction)
+    if vc:
+        await interaction.followup.send(f"✅ Joined **{vc.channel.name}**.")
+
+
+@bot.tree.command(name="leave", description="Leave the voice channel and clear the queue")
+async def leave(interaction: discord.Interaction):
+    player = bot.get_player(interaction.guild_id)
+    player.queue.clear()
+    vc = interaction.guild.voice_client
+    if vc:
+        await vc.disconnect()
+        await interaction.response.send_message("👋 Left the voice channel.")
+    else:
+        await interaction.response.send_message("❌ Not in a voice channel.", ephemeral=True)
+
+
+# ── Owner sync command (prefix) ──────────────────────────────────────────────
+
+@bot.command(name="sync", hidden=True)
+@commands.is_owner()
+async def sync(ctx: commands.Context):
+    synced = await bot.tree.sync()
+    await ctx.send(f"✅ Synced {len(synced)} commands globally.")
+
+
+# ── Entry point ──────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    bot.run(DISCORD_TOKEN)
