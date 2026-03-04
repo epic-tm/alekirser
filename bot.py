@@ -23,7 +23,7 @@ GITHUB_RAW = f"https://raw.githubusercontent.com/{GITHUB_REPO}/{GITHUB_BRANCH}"
 
 FFMPEG_OPTIONS = {
     "before_options": "-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5",
-    "options": "-vn -af 'aresample=48000' -f s16le -ar 48000 -ac 2",
+    "options": "-vn",
 }
 
 
@@ -58,7 +58,6 @@ class M4ABot(commands.Bot):
         return self.guild_players[guild_id]
 
     async def fetch_m4a_files(self) -> list[dict]:
-        """Fetch all .m4a files from root and music/ folder."""
         paths = ["", "music"]
         results = []
         async with aiohttp.ClientSession() as session:
@@ -75,15 +74,19 @@ class M4ABot(commands.Bot):
                             "name": f["name"],
                             "raw_url": f"{GITHUB_RAW}/{path + '/' if path else ''}{f['name']}",
                         })
+        log.info(f"Found {len(results)} m4a files: {[f['name'] for f in results]}")
         return results
 
     async def download_file(self, url: str, dest: str) -> None:
+        log.info(f"Downloading {url} -> {dest}")
         async with aiohttp.ClientSession() as session:
             async with session.get(url) as resp:
                 resp.raise_for_status()
                 with open(dest, "wb") as f:
                     async for chunk in resp.content.iter_chunked(1024 * 64):
                         f.write(chunk)
+        size = os.path.getsize(dest)
+        log.info(f"Download complete, file size: {size} bytes")
 
     def play_next(self, guild: discord.Guild, error=None):
         if error:
@@ -102,23 +105,29 @@ class M4ABot(commands.Bot):
         player.current = None
 
         if not player.queue:
+            log.info("Queue is empty, stopping.")
             return
 
         vc: discord.VoiceClient = guild.voice_client
         if not vc or not vc.is_connected():
+            log.warning("No voice client connected, can't play.")
             return
 
         track = player.queue.popleft()
         player.current = track
 
+        log.info(f"Attempting to play: {track.filename}")
+        if not os.path.exists(track.filename):
+            log.error(f"File not found: {track.filename}")
+            return
+
         try:
             source = discord.FFmpegPCMAudio(track.filename, **FFMPEG_OPTIONS)
             source = discord.PCMVolumeTransformer(source, volume=1.0)
             vc.play(source, after=lambda e: self.play_next(guild, e))
-            log.info(f"Now playing: {track.title}")
+            log.info(f"Now playing: {track.title} — vc.is_playing()={vc.is_playing()}")
         except Exception as e:
-            log.error(f"Failed to play {track.title}: {e}")
-            await self._advance_queue(guild)
+            log.error(f"FFmpeg error playing {track.title}: {e}")
 
 
 bot = M4ABot()
@@ -134,6 +143,7 @@ async def ensure_voice(interaction: discord.Interaction) -> Optional[discord.Voi
         await vc.move_to(member.voice.channel)
     elif not vc:
         vc = await member.voice.channel.connect()
+    log.info(f"Voice client connected to: {vc.channel.name}")
     return vc
 
 
@@ -152,6 +162,8 @@ async def alekirser(interaction: discord.Interaction):
         return
 
     chosen = random.choice(files)
+    log.info(f"Chose: {chosen['name']} from {chosen['raw_url']}")
+
     vc = await ensure_voice(interaction)
     if not vc:
         return
@@ -168,14 +180,13 @@ async def alekirser(interaction: discord.Interaction):
         return
 
     track = Track(title=chosen["name"], filename=dest, requester=interaction.user.display_name)
+    player.queue.append(track)
 
-    if vc.is_playing() or vc.is_paused():
-        player.queue.append(track)
-        await interaction.followup.send(f"📋 Queued: **{track.title}**")
-    else:
-        player.queue.appendleft(track)
+    if not vc.is_playing() and not vc.is_paused():
         await bot._advance_queue(interaction.guild)
         await interaction.followup.send(f"🎲 Now playing: **{track.title}**")
+    else:
+        await interaction.followup.send(f"📋 Queued: **{track.title}**")
 
 
 @bot.tree.command(name="skip", description="Skip the current track")
@@ -195,42 +206,6 @@ async def stop(interaction: discord.Interaction):
     if vc:
         vc.stop()
     await interaction.response.send_message("⏹️ Stopped and queue cleared.")
-
-
-@bot.tree.command(name="pause", description="Pause playback")
-async def pause(interaction: discord.Interaction):
-    vc = interaction.guild.voice_client
-    if vc and vc.is_playing():
-        vc.pause()
-        await interaction.response.send_message("⏸️ Paused.")
-    else:
-        await interaction.response.send_message("❌ Nothing to pause.", ephemeral=True)
-
-
-@bot.tree.command(name="resume", description="Resume paused playback")
-async def resume(interaction: discord.Interaction):
-    vc = interaction.guild.voice_client
-    if vc and vc.is_paused():
-        vc.resume()
-        await interaction.response.send_message("▶️ Resumed.")
-    else:
-        await interaction.response.send_message("❌ Not paused.", ephemeral=True)
-
-
-@bot.tree.command(name="queue", description="Show the current queue")
-async def queue_cmd(interaction: discord.Interaction):
-    player = bot.get_player(interaction.guild_id)
-    lines = []
-    if player.current:
-        lines.append(f"▶️ **Now playing:** {player.current.title}")
-    if player.queue:
-        lines.append("**Up next:**")
-        for i, t in enumerate(player.queue, 1):
-            lines.append(f"  {i}. {t.title} — {t.requester}")
-    if not lines:
-        await interaction.response.send_message("📭 Queue is empty.")
-    else:
-        await interaction.response.send_message("\n".join(lines))
 
 
 @bot.tree.command(name="leave", description="Leave the voice channel")
