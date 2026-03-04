@@ -1,2 +1,5 @@
 [phases.setup]
-nixPkgs = ["ffmpeg", "libsodium", "gcc", "python312Packages.pynacl"]
+nixPkgs = ["ffmpeg", "libsodium"]
+
+[phases.install]
+cmds = ["pip install -U PyNaCl discord.py[voice]"]
