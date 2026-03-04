@@ -1,5 +1,5 @@
 [phases.setup]
 nixPkgs = ["ffmpeg", "libsodium"]
 
-[phases.install]
-cmds = ["pip install -U PyNaCl discord.py[voice]"]
+[variables]
+NIXPACKS_PYTHON_VERSION = "3.12"
